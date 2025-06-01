@@ -1,51 +1,51 @@
 from fastapi import FastAPI, Depends, HTTPException
-from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from database import SessionLocal, engine
+from schemas import SignInSchema, SignUpSchema
+from jwtsign import  decode, sign, hash_password, verify_password
+from models import User, Base
 
-from jwtsign import sign, decode
+
+
 
 app = FastAPI()
-
-userlist = []
-
-class SignUpSchema(BaseModel):
-    name: str = "someonidk"
-    email: str = "someone@something.com"
-    password: str = "somethingidk"
+Base.metadata.create_all(bind=engine)
 
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.post("/signup")
-def sign_up(request: SignUpSchema):
-    # Проверка: уже зарегистрирован?
-    for user in userlist:
-        if user.email == request.email:
-            raise HTTPException(status_code=400, detail="Email already registered")
+def sign_up(request: SignUpSchema, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.email == request.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Если нет — добавляем
-    userlist.append(request)
+    user = User(
+        name=request.name,
+        email=request.email,
+        hashed_password=hash_password(request.password)
+    )
 
-    # Генерим токен
-    token = sign(request.email)
-
-    return token
-
-
-
-class SignInSchema(BaseModel):
-    email: str = "someone@somethong.com"
-    password: str = "someonethongidk"
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"access_token": sign(user.email), "token_type": "bearer"}
 
 
-@app.post("/signin")
-def sign_in(request: SignInSchema):
-    for user in userlist:
-        if user.email == request.email:
-            if user.password == request.password:
-                token = sign(user.email)
-                return token
-            else:
-                raise HTTPException(status_code=404, detail="Incorrect password")
-    raise HTTPException(status_code=400, detail="Email not registered")
+@app.post("signin")
+def sign_in(request: SignInSchema, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user or not verify_password(request.password, user.jhashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"access_token": sign(user.email), "token_type": "bearer"}
+
+
+
+
 
 @app.post("/authtest")
 def auth_test(decoded: str = Depends(decode)):
